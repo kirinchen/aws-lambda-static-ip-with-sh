@@ -3,43 +3,39 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   SAM Template describing how to make a lambda function that sends traffic through a static IP
 
-Parameters:
-  VpcCidrBlock:
-    Type: String
-  PublicSubnetCidrBlock:
-    Type: String
-  PrivateSubnetCidrBlock:
-    Type: String
-
 Resources:
+  # Create VPC with hardcoded CIDR Block
   StaticIpVpc:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: !Ref VpcCidrBlock
+      CidrBlock: 10.0.0.0/16  # Hardcoded VPC CIDR block
       EnableDnsSupport: true
       EnableDnsHostnames: true
       InstanceTenancy: default
 
+  # Create public subnet with hardcoded CIDR Block
   PublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref StaticIpVpc
-      CidrBlock: !Ref PublicSubnetCidrBlock
+      CidrBlock: 10.0.1.0/24  # Hardcoded public subnet CIDR block
       MapPublicIpOnLaunch: false
       AvailabilityZone: !Select
         - 0
         - Fn::GetAZs: !Ref 'AWS::Region'
 
+  # Create private subnet with hardcoded CIDR Block
   PrivateSubnet:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref StaticIpVpc
-      CidrBlock: !Ref PrivateSubnetCidrBlock
+      CidrBlock: 10.0.2.0/24  # Hardcoded private subnet CIDR block
       MapPublicIpOnLaunch: false
       AvailabilityZone: !Select
         - 0
         - Fn::GetAZs: !Ref 'AWS::Region'
 
+  # Create an Internet Gateway
   InternetGateway:
     Type: AWS::EC2::InternetGateway
 
@@ -96,38 +92,37 @@ Resources:
       RouteTableId: !Ref VpcPrivateRouteTable
       SubnetId: !Ref PrivateSubnet
 
-  API:
-    Type: AWS::Serverless::Api
+  # Create Security Group for Lambda
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
     Properties:
-      StageName: v1
-      EndpointConfiguration:
-        Type: REGIONAL
-      DefinitionBody:
-        Fn::Transform:
-          Name: AWS::Include
-          Parameters:
-            Location: ./open-api.yaml      
-    
+      GroupDescription: Allow all traffic for Lambda
+      VpcId: !Ref StaticIpVpc
+      SecurityGroupIngress:
+        - IpProtocol: -1  # -1 means all protocols (supports all types)
+          FromPort: 0     # Allow all ports
+          ToPort: 65535   # Allow all ports
+          CidrIp: 0.0.0.0/0  # Allow from all IPs
+      SecurityGroupEgress:
+        - IpProtocol: -1  # Allow all outbound traffic
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+
   StaticIpLambda:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: lambdas/static-ip-lambda
       Handler: static-ip-lambda.lambdaHandler
-      Runtime: nodejs12.x
-      Timeout: 10      
+      Runtime: nodejs18.x  # Updated to nodejs18.x
+      Timeout: 100      
       Role: !GetAtt StaticIpLambdaRole.Arn
       VpcConfig:
         SecurityGroupIds:
-          - !GetAtt StaticIpVpc.DefaultSecurityGroup
+          - !Ref LambdaSecurityGroup  # Use the created Security Group
         SubnetIds:
           - !Ref PrivateSubnet
-      Events:
-        VerifyStaticIpEvent:
-          Type: Api
-          Properties:
-            RestApiId: !Ref API
-            Path: /ip
-            Method: GET
       Environment:
         Variables:
           STATIC_IP: !Ref ElasticIp
@@ -149,10 +144,3 @@ Resources:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
 
 
-Outputs:
-  StaticIpAddress:
-    Description: Address of the generated static ip
-    Value: !Ref ElasticIp
-  TestEndpoint: 
-    Description: Url of test endpoint to verify Static IP
-    Value: !Join ['', ['https://', !Ref API, '.execute-api.', !Ref AWS::Region, '.amazonaws.com/v1/ip']]
